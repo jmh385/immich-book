@@ -24,7 +24,7 @@ function AlbumSelector({ immichConfig, onSelectAlbum }: AlbumSelectorProps) {
       // Fetch both owned and shared albums concurrently
       const [ownedAlbums, sharedAlbums] = await Promise.all([
         getAllAlbums({}),
-        getAllAlbums({ shared: true }),
+        getAllAlbums({ isShared: true }),
       ]);
 
       // Combine and deduplicate by album ID using Map

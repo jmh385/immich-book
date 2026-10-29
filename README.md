@@ -114,9 +114,9 @@ add_header 'Access-Control-Allow-Headers' 'x-api-key, Content-Type, Accept' alwa
 
 ### Self-Hosting (Recommended)
 
-Self-hosting on the same domain as your Immich server is the most secure option and doesn't require CORS configuration.
+Self-hosting on the same domain as your Immich server is the most secure option and doesn't require CORS configuration. [Docker](#option-3-docker) is the quickest way there, as the image proxies the Immich API itself.
 
-First, build the application:
+For the nginx options below, first build the application:
 
 ```bash
 git clone https://github.com/ch1bo/immich-book.git
@@ -158,9 +158,90 @@ server {
 
 Reload nginx, for example using `sudo nginx -s reload`
 
-#### Option 3: Docker (Coming Soon)
+#### Option 3: Docker
 
-Docker support is planned for easier deployment.
+The image serves the built app and proxies `/api` to your Immich server, so
+browser and API share one origin and no CORS configuration is needed.
+
+Build it (on the machine that will run it, a Raspberry Pi included):
+
+```bash
+git clone https://github.com/ch1bo/immich-book.git
+cd immich-book
+docker build -t immich-book .
+```
+
+Run it, pointing `IMMICH_URL` at your Immich server:
+
+```bash
+docker run -d --name immich-book -p 2284:80 -e IMMICH_URL=https://photos.example.com immich-book
+```
+
+Immich Book is then available at `http://<host>:2284` and connects to the
+configured server, so you only need to enter your API key.
+
+##### Docker Compose
+
+Alongside an existing Immich stack, reach the Immich container directly by
+joining its network. The [docker-compose.yml](docker-compose.yml) in this
+repository is a starting point:
+
+```yaml
+services:
+  immich-book:
+    build: .
+    container_name: immich-book
+    environment:
+      IMMICH_URL: http://immich-server:2283
+    ports:
+      - "2284:80"
+    restart: unless-stopped
+    networks:
+      - immich_default
+
+networks:
+  immich_default:
+    external: true
+```
+
+Adjust `immich_default` to the network of your Immich stack, which
+`docker network ls` lists.
+
+##### Configuration
+
+| Variable        | Default                     | Description                                                                                                        |
+| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `IMMICH_URL`    | _unset_                     | Immich server that `/api` is proxied to. When unset, the server URL is entered in the web UI and Immich needs CORS. |
+| `DNS_RESOLVERS` | resolvers of the container  | Name servers used to resolve `IMMICH_URL`, space separated.                                                        |
+
+The upstream is resolved per request, so the container starts even when Immich
+is not up yet and follows it when its container is recreated.
+
+##### Serving from a sub directory
+
+The sub path is baked into the asset URLs, so it is a build argument rather than
+an environment variable:
+
+```bash
+docker build --build-arg BASE_PATH=/book/ -t immich-book .
+```
+
+Point your reverse proxy at the container without stripping the prefix:
+
+```nginx
+location /book/ {
+    proxy_pass http://127.0.0.1:2284;
+}
+```
+
+##### Building for another architecture
+
+To build on your workstation for a 64-bit Raspberry Pi instead of on the Pi
+itself:
+
+```bash
+docker buildx build --platform linux/arm64 -t immich-book --load .
+```
 
 ### Using Immich Book
 

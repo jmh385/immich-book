@@ -1,0 +1,22 @@
+# Example deployment, see the Docker section of the README.
+services:
+  immich-book:
+    build: .
+    # Or use a published image instead of building locally:
+    # image: ghcr.io/ch1bo/immich-book:latest
+    container_name: immich-book
+    environment:
+      # Immich server that /api is proxied to, which is what avoids any CORS
+      # setup. Leave it unset to enter the server URL in the web UI instead.
+      IMMICH_URL: http://immich-server:2283
+    ports:
+      - "2284:80"
+    restart: unless-stopped
+    # When Immich runs in its own compose project, join its network so that
+    # "immich-server" resolves, and declare it as external below.
+    # networks:
+    #   - immich_default
+
+# networks:
+#   immich_default:
+#     external: true

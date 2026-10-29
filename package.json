@@ -23,7 +23,7 @@
   "dependencies": {
     "@fontsource/roboto": "^5.2.8",
     "@immich/justified-layout-wasm": "^0.4.3",
-    "@immich/sdk": "^2.2.3",
+    "@immich/sdk": "^3.1.0",
     "@mdi/js": "^7.4.47",
     "@mdi/react": "^1.6.1",
     "@react-pdf/renderer": "^4.3.1",

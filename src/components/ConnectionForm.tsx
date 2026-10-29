@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { init, getAllAlbums } from "@immich/sdk";
+import { getProxyTarget } from "../config";
 
 export interface ImmichConfig {
   serverUrl: string;
@@ -12,7 +13,7 @@ interface ConnectionFormProps {
 }
 
 function ConnectionForm({ onConnect }: ConnectionFormProps) {
-  const proxyTarget = import.meta.env.VITE_IMMICH_PROXY_TARGET;
+  const proxyTarget = getProxyTarget();
   const [serverUrl, setServerUrl] = useState(proxyTarget || "");
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
@@ -24,8 +25,12 @@ function ConnectionForm({ onConnect }: ConnectionFormProps) {
     setIsConnecting(true);
 
     try {
-      // If proxy is configured, use proxy path. Otherwise, use full URL
-      const baseUrl = proxyTarget ? "/api" : serverUrl.replace(/\/$/, "") + "/api";
+      // If proxy is configured, use proxy path. Otherwise, use full URL. The
+      // proxy path is relative to the base the app is served under, so that a
+      // deployment in a sub directory proxies through its own sub path.
+      const baseUrl = proxyTarget
+        ? `${import.meta.env.BASE_URL}api`.replace(/\/\/+/g, "/")
+        : serverUrl.replace(/\/$/, "") + "/api";
 
       // Initialize the SDK
       init({ baseUrl, apiKey });
@@ -58,12 +63,14 @@ function ConnectionForm({ onConnect }: ConnectionFormProps) {
         {proxyTarget && (
           <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
             <p className="text-xs text-blue-800">
-              <strong>Dev Mode:</strong> Using proxy to {proxyTarget}
+              <strong>Proxied connection:</strong> requests go to{" "}
+              {proxyTarget} via this host, no CORS setup needed.
             </p>
           </div>
         )}
 
         {!import.meta.env.DEV &&
+          !proxyTarget &&
           typeof window !== "undefined" &&
           !window.location.hostname.match(
             /^(localhost|127\.0\.0\.1|.*\.local)$/,

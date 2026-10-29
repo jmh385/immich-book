@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import {
-  getAlbumInfo,
+  searchAssets,
   type AlbumResponseDto,
   type AssetResponseDto,
 } from "@immich/sdk";
@@ -220,8 +220,8 @@ const createDynamicStyles = (fontSize: number) => {
     },
     descriptionSide: {
       padding: basePadding,
-      display: "flex",
-      justifyContent: "center",
+      display: "flex" as const,
+      justifyContent: "center" as const,
       backgroundColor: "#F3F4F6",
     },
   };
@@ -256,6 +256,36 @@ const createWebStyles = (fontSize: number) => {
     },
   };
 };
+
+// The album endpoint no longer returns its assets, so album contents are read
+// through the search API, which pages at this many assets per request.
+const ALBUM_SEARCH_PAGE_SIZE = 1000;
+
+/** All assets of an album, with the EXIF data the layout is based on. */
+async function fetchAlbumAssets(albumId: string): Promise<AssetResponseDto[]> {
+  // Keyed by id, because paging over a large album can repeat an asset.
+  const assets = new Map<string, AssetResponseDto>();
+  let page: number | undefined = 1;
+
+  while (page !== undefined) {
+    const { assets: result } = await searchAssets({
+      metadataSearchDto: {
+        albumIds: [albumId],
+        withExif: true,
+        size: ALBUM_SEARCH_PAGE_SIZE,
+        page,
+      },
+    });
+
+    for (const asset of result.items) {
+      assets.set(asset.id, asset);
+    }
+
+    page = result.nextPage ? Number(result.nextPage) : undefined;
+  }
+
+  return [...assets.values()];
+}
 
 function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   const [assets, setAssets] = useState<AssetResponseDto[]>([]);
@@ -436,9 +466,9 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     try {
       setIsLoading(true);
       setError(null);
-      const albumData = await getAlbumInfo({ id: album.id });
+      const albumAssets = await fetchAlbumAssets(album.id);
       // Sort assets by creation date ascending
-      const sorted = albumData.assets.sort((a, b) => {
+      const sorted = albumAssets.sort((a, b) => {
         return (
           new Date(a.fileCreatedAt).getTime() -
           new Date(b.fileCreatedAt).getTime()

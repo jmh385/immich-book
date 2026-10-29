@@ -1,0 +1,40 @@
+# Rendered into /etc/nginx/conf.d/default.conf on container start by
+# /docker-entrypoint.d/30-immich-book-config.sh, which fills in the sub path the
+# app is served under and the location proxying to Immich.
+#
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+%%API%%
+
+    # Runtime configuration and the entry point change with every deployment,
+    # the content hashed assets never do.
+    location = %%BASE%%/config.js {
+        alias /usr/share/nginx/html/config.js;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location = %%BASE%%/index.html {
+        alias /usr/share/nginx/html/index.html;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location %%BASE%%/assets/ {
+        alias /usr/share/nginx/html/assets/;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # Single page app, unknown paths are routed client side.
+    location %%BASE%%/ {
+        alias /usr/share/nginx/html/;
+        try_files $uri $uri/ %%BASE%%/index.html;
+    }
+}
