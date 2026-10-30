@@ -7,19 +7,34 @@
  * absolute within the container. Good enough for exact-by-construction tests
  * and the example, never used in the shipped app.
  */
-class JustifiedLayout {
-  positions = [];
 
-  constructor(aspectRatios, options) {
+interface Position {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface JustifiedLayoutOptions {
+  rowHeight: number;
+  rowWidth: number;
+  spacing?: number;
+}
+
+class JustifiedLayout {
+  /** Sparse by design: index = asset index in the row sequence. */
+  positions: Array<Position | undefined> = [];
+
+  constructor(aspectRatios: ArrayLike<number>, options: JustifiedLayoutOptions) {
     const rowHeight = options.rowHeight;
     const rowWidth = options.rowWidth;
     const spacing = options.spacing || 0;
 
     let top = 0;
-    let row = [];
-    let rowRatios = [];
+    let row: number[] = [];
+    let rowRatios: number[] = [];
 
-    const flushRow = (height) => {
+    const flushRow = (height: number): void => {
       let left = 0;
       for (let k = 0; k < row.length; k++) {
         const width = height * rowRatios[k];
@@ -31,7 +46,7 @@ class JustifiedLayout {
       rowRatios = [];
     };
 
-    const rowHeightAtScale = (ratios) => {
+    const rowHeightAtScale = (ratios: number[]): number => {
       const sumRatios = ratios.reduce((sum, ratio) => sum + ratio, 0);
       return (rowWidth - spacing * (ratios.length - 1)) / sumRatios;
     };
@@ -49,6 +64,9 @@ class JustifiedLayout {
         // Re-flow without the last item so the finished row fills the width.
         const lastIndex = row.pop();
         const lastRatio = rowRatios.pop();
+        if (lastIndex === undefined || lastRatio === undefined) {
+          throw new Error("justified-layout mock: inconsistent row state");
+        }
         flushRow(rowHeightAtScale(rowRatios));
         row.push(lastIndex);
         rowRatios.push(lastRatio);
@@ -59,7 +77,7 @@ class JustifiedLayout {
     }
   }
 
-  getPosition(i) {
+  getPosition(i: number): Position {
     const position = this.positions[i];
     if (!position) {
       throw new Error(`no position for index ${i}`);

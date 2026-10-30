@@ -16,6 +16,103 @@ Format per entry:
 
 ---
 
+## Entry 4 — 2026-10-30 — Goals 4–7: editable text boxes, layout presets, z-order fix, backgrounds
+
+**Reference:** TASKS.md goals 4–7
+
+### Plan
+
+**Reference:** TASKS.md goals 4–7
+
+### Plan
+
+1. New `src/utils/layoutPresets.ts` — preset ids + normalized slot grids
+   (full, 2-up, 2-stacked, feature+one, feature+two, 3-across, banner+3,
+   4-grid, 5-collage, 6-grid), resolved to content-area pixels with real
+   spacing gutters (last slot absorbs rounding).
+2. New `src/utils/textBoxes.ts` — text box model (`caption`/`date`/
+   `description`), default boxes computed from photo geometry and existing
+   description positions, per-box overrides (text, x, y, width, family, size,
+   colour, align, hidden), and a resolver. Fonts limited to Roboto + PDF
+   built-ins (Helvetica/Times/Courier).
+3. New `src/utils/backgrounds.ts` — `color` / `gradient` (PowerPoint-like
+   presets from web research) / `photo` specs, preview CSS, PDF gradient
+   stops, and a contrast helper for default text colours.
+4. `src/utils/pageLayout.ts` — page-based pagination: each page is either a
+   preset (consume its slot count) or the existing style layout; presets are
+   keyed by the page's first asset id. Alignment and combine behavior kept.
+5. `src/utils/book.ts` — run the logical (uncombined) layout, attach text
+   boxes and backgrounds per logical page, then combine pages (shifting the
+   right half's text boxes and keeping both backgrounds). Expose logical page
+   info for the per-page UI.
+6. `PhotoGrid.tsx` — new persisted config (`pageLayouts`, `textBoxOverrides`,
+   `pageBackgrounds`, `defaultBackground`); page-settings panel (layout +
+   background per logical page, album default); text inspector with drag;
+   preview paints backgrounds, then photos, then text (fixes z-order bug);
+   PDF paints backgrounds (SVG gradient / full-page image) and the same text
+   boxes after photos.
+7. Tests: preset geometry, pagination with presets, text box defaults and
+   overrides, background resolution/CSS/contrast, book-level text/background
+   attachment and combined shifts, and a regression test that caption boxes
+   sit in the reserved margin (never intersect photos).
+8. Docs: tick TASKS.md goals 4–7, update AGENTS.md architecture notes, record
+   verification and risks here.
+
+Risks: page overrides keyed by anchor ids can drift when pagination changes;
+combined pages need per-half backgrounds; PDF gradients require SVG.
+
+---
+
+## Entry 3 — 2026-10-30 — Remove implicit/explicit `any`, type-check mocks, record next tasks
+
+**Reference:** user request "make sure there is no implicit any" + next task list
+
+### Plan
+
+1. Type the Jest manual mock (it was excluded from `tsc` and full of implicit
+   `any`), then include `__mocks__` in `tsconfig.json` so it is checked.
+2. Remove the remaining explicit `any` in `AlbumSelector.tsx` (typed error
+   shape).
+3. Make the test fixture fully typed instead of `as unknown as
+   AssetResponseDto`; adjust the one test that simulated a missing
+   `localDateTime` through the fixture.
+4. Record the four new goals (editable text boxes, richer/per-page layouts,
+   text-under-image bug, per-page backgrounds) in `TASKS.md` with approach and
+   acceptance criteria.
+
+### Result
+
+- `__mocks__/@immich/justified-layout-wasm.ts` — `Position` and
+  `JustifiedLayoutOptions` interfaces; typed sparse `positions`, constructor
+  params, `flushRow`/`rowHeightAtScale` and `getPosition(): Position`; explicit
+  guard instead of non-null assertions.
+- `tsconfig.json` — `include` now `["src", "__mocks__"]`.
+- `src/components/AlbumSelector.tsx` — `err as any` → `err as AlbumLoadError`
+  (`{ message?: string; status?: number }`).
+- `src/utils/__tests__/testAssets.ts` — returns a complete `AssetResponseDto`
+  (added `createdAt`, `duration`, `height`, `width`; full `PersonResponseDto`
+  entries), no double cast. SDK enums are imported as **types** and the literal
+  values asserted, so Jest does not try to load the ESM-only SDK at runtime.
+- `src/utils/__tests__/photoGrouping.test.ts` — the `fileCreatedAt` fallback
+  test now uses a minimal `GroupableAsset` instead of a fixture with a null
+  `localDateTime` (the SDK type requires a string).
+- `TASKS.md` — goals 4–7 added under Open with approach, acceptance criteria
+  and open questions; follow-ups from goals 1–3 kept below them.
+
+### Verification
+
+- `npm run type-check`: clean, now covering `__mocks__`.
+- `npm test`: 5 suites, 53 tests, all passing.
+
+### Risks
+
+- Importing SDK enums as values breaks Jest (ESM-only package); keep them
+  type-only in tests.
+- The fixture now mirrors the SDK's required fields, so an SDK upgrade that
+  adds fields will fail type-check until the fixture is updated (intended).
+
+---
+
 ## Entry 2 — Implement all TASKS.md goals: auto layout options, automatic grouping, auto text
 
 **Reference:** TASKS.md goals 1–3
@@ -267,3 +364,21 @@ Record the three main goals of this fork as a maintained task list.
   (scope of candidates still open), 2. automatic page grouping by
   location/person/date-time, 3. auto-generated text for groupings; plus "PR #9
   already applied" and "don't regress row-based alignment / font size" notes
+
+### Result
+
+Implemented goals 4–7:
+- New modules `layoutPresets.ts`, `textBoxes.ts`, `backgrounds.ts`.
+- `pageLayout.ts` paginates preset pages alongside the existing engine.
+- `book.ts` enriches logical pages with text boxes and backgrounds, then
+  combines sheets (shifting right-half text boxes and keeping both backgrounds).
+- `PhotoGrid.tsx` adds persisted config for page layouts, text-box overrides,
+  page backgrounds and an album default background; preview/PDF render
+  backgrounds, then photos, then text boxes (fixing z-order); UI panels for
+  page layouts/backgrounds and a text-box inspector with drag.
+- TypeScript type-check clean; 53 Jest tests pass; production build succeeds.
+
+Risks: per-page overrides are keyed by the page's first asset id and can drift
+when pagination changes; gradients use SVG in PDF (banding possible on large
+flat areas); text-box drag coordinates are converted from 72 DPI screen
+pixels to 300 DPI page pixels.

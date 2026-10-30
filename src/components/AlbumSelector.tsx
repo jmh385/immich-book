@@ -7,6 +7,12 @@ interface AlbumSelectorProps {
   onSelectAlbum: (album: AlbumResponseDto) => void;
 }
 
+/** Shape of the SDK fetch error we inspect when album loading fails. */
+interface AlbumLoadError {
+  message?: string;
+  status?: number;
+}
+
 function AlbumSelector({ immichConfig, onSelectAlbum }: AlbumSelectorProps) {
   const [albums, setAlbums] = useState<AlbumResponseDto[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,7 +52,7 @@ function AlbumSelector({ immichConfig, onSelectAlbum }: AlbumSelectorProps) {
 
       setAlbums(uniqueAlbums);
     } catch (err) {
-      const error = err as any;
+      const error = err as AlbumLoadError;
       let errorMessage = error.message || "Failed to load albums";
 
       // Check if it's a 401 Unauthorized error

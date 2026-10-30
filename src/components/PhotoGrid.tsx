@@ -13,6 +13,11 @@ import {
   Text,
   StyleSheet,
   Font,
+  Svg,
+  Defs,
+  LinearGradient,
+  Stop,
+  Rect,
 } from "@react-pdf/renderer";
 import {
   PAGE_SIZES,
@@ -23,6 +28,24 @@ import {
   type GroupingMode,
   type LayoutStyleChoice,
 } from "../utils/book";
+import {
+  LAYOUT_PRESETS,
+  type PageLayoutPreset,
+} from "../utils/layoutPresets";
+import {
+  DEFAULT_BACKGROUND,
+  GRADIENT_PRESETS,
+  backgroundCss,
+  pdfGradient,
+  type BackgroundSpec,
+  type GradientPresetId,
+} from "../utils/backgrounds";
+import {
+  TEXT_FONT_FAMILIES,
+  fontCss,
+  type TextBox,
+  type TextBoxOverride,
+} from "../utils/textBoxes";
 import type { ImmichConfig } from "./ConnectionForm";
 import roboto400 from "@fontsource/roboto/files/roboto-latin-400-normal.woff?url";
 import roboto500 from "@fontsource/roboto/files/roboto-latin-500-normal.woff?url";
@@ -73,6 +96,9 @@ interface GlobalConfig {
   groupingMode: GroupingMode;
   layoutStyle: LayoutStyleChoice;
   showGroupLabels: boolean;
+
+  // Page backgrounds (TASKS.md goal 7)
+  defaultBackground: BackgroundSpec;
 }
 
 interface AlbumConfig extends GlobalConfig {
@@ -83,6 +109,12 @@ interface AlbumConfig extends GlobalConfig {
   pageAlignments: Record<number, PageAlignment>;
   /** Manual caption overrides keyed by the group's first asset id. */
   groupLabelOverrides: Record<string, string>;
+  /** Per-page layout presets keyed by the page's first asset id. */
+  pageLayouts: Record<string, PageLayoutPreset>;
+  /** Per-text-box overrides keyed by `kind:assetId`. */
+  textBoxOverrides: Record<string, TextBoxOverride>;
+  /** Per-page background overrides keyed by the page's first asset id. */
+  pageBackgrounds: Record<string, BackgroundSpec>;
 }
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
@@ -101,6 +133,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   groupingMode: "auto",
   layoutStyle: "auto",
   showGroupLabels: true,
+  defaultBackground: DEFAULT_BACKGROUND,
 };
 
 // Helper functions for config persistence
@@ -138,6 +171,9 @@ function loadAlbumConfig(albumId: string): AlbumConfig {
         descriptionPositions: {},
         pageAlignments: {},
         groupLabelOverrides: {},
+        pageLayouts: {},
+        textBoxOverrides: {},
+        pageBackgrounds: {},
         ...albumSpecific,
       };
     }
@@ -152,6 +188,9 @@ function loadAlbumConfig(albumId: string): AlbumConfig {
     descriptionPositions: {},
     pageAlignments: {},
     groupLabelOverrides: {},
+    pageLayouts: {},
+    textBoxOverrides: {},
+    pageBackgrounds: {},
   };
 }
 
@@ -179,6 +218,7 @@ function saveAlbumConfig(albumId: string, config: AlbumConfig) {
       groupingMode: config.groupingMode,
       layoutStyle: config.layoutStyle,
       showGroupLabels: config.showGroupLabels,
+      defaultBackground: config.defaultBackground,
     };
     saveGlobalConfig(globalConfig);
   } catch (e) {
@@ -191,6 +231,29 @@ function saveAlbumConfig(albumId: string, config: AlbumConfig) {
 // At 72 DPI: 1 inch = 72 points
 // Conversion: points = pixels * (72/300)
 const toPoints = (pixels: number) => pixels * (72 / 300);
+
+// Map a CSS-style gradient angle to SVG linear-gradient coordinates.
+function gradientCoordinates(angle: number): {
+  x1: string;
+  y1: string;
+  x2: string;
+  y2: string;
+} {
+  switch (angle) {
+    case 0:
+      return { x1: "0%", y1: "100%", x2: "0%", y2: "0%" };
+    case 45:
+      return { x1: "0%", y1: "100%", x2: "100%", y2: "0%" };
+    case 90:
+      return { x1: "0%", y1: "0%", x2: "100%", y2: "0%" };
+    case 135:
+      return { x1: "0%", y1: "0%", x2: "100%", y2: "100%" };
+    case 180:
+      return { x1: "0%", y1: "0%", x2: "0%", y2: "100%" };
+    default:
+      return { x1: "0%", y1: "0%", x2: "100%", y2: "100%" };
+  }
+}
 
 // Static styles for the PDF
 const staticStyles = StyleSheet.create({
@@ -208,93 +271,6 @@ const staticStyles = StyleSheet.create({
 });
 
 // Dynamic styles based on font size
-const createDynamicStyles = (fontSize: number) => {
-  const basePadding = fontSize * 0.67;
-
-  return {
-    // Common text style
-    text: {
-      color: "black",
-      fontSize: fontSize,
-      fontFamily: "Roboto",
-      lineHeight: 1,
-      letterSpacing: 0.2,
-    },
-    // Date overlay styles
-    dateOverlay: {
-      backgroundColor: "rgba(255, 255, 255, 0.7)",
-      paddingHorizontal: basePadding,
-      paddingVertical: basePadding * 0.5,
-      borderRadius: basePadding * 0.5,
-    },
-    // Description styles
-    descriptionOverlay: {
-      backgroundColor: "rgba(255, 255, 255, 0.7)",
-      color: "black",
-      fontSize: fontSize,
-      padding: basePadding,
-      fontFamily: "Roboto",
-      lineHeight: 1,
-      letterSpacing: 0.2,
-    },
-    descriptionSide: {
-      padding: basePadding,
-      display: "flex" as const,
-      justifyContent: "center" as const,
-      backgroundColor: "#F3F4F6",
-    },
-    // Automatic group caption (TASKS.md goal 3)
-    groupLabel: {
-      color: "#4B5563",
-      fontSize: fontSize,
-      fontFamily: "Roboto",
-      lineHeight: 1,
-      letterSpacing: 0.2,
-      textAlign: "center" as const,
-    },
-  };
-};
-
-// Web preview styles
-const createWebStyles = (fontSize: number) => {
-  const basePadding = fontSize * 0.67;
-
-  return {
-    date: {
-      hyphens: "none" as const,
-      wordWrap: "break-word" as const,
-      fontSize: `${fontSize}px`,
-      padding: `${basePadding * 0.5}px ${basePadding}px`,
-      borderRadius: `${basePadding * 0.5}px`,
-      lineHeight: 1,
-    },
-    description: {
-      hyphens: "none" as const,
-      wordWrap: "break-word" as const,
-      fontSize: `${fontSize}px`,
-      padding: `${basePadding}px`,
-      lineHeight: 1,
-    },
-    descriptionSide: {
-      hyphens: "none" as const,
-      wordWrap: "break-word" as const,
-      fontSize: `${fontSize}px`,
-      padding: `${basePadding}px`,
-      lineHeight: 1,
-    },
-    // Automatic group caption (TASKS.md goal 3)
-    groupLabel: {
-      hyphens: "none" as const,
-      wordWrap: "break-word" as const,
-      fontSize: `${fontSize}px`,
-      lineHeight: 1,
-      letterSpacing: 0.2,
-      color: "#4B5563",
-      textAlign: "center" as const,
-    },
-  };
-};
-
 // The album endpoint no longer returns its assets, so album contents are read
 // through the search API, which pages at this many assets per request.
 const ALBUM_SEARCH_PAGE_SIZE = 1000;
@@ -395,9 +371,6 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   );
 
   // Create dynamic styles based on current fontSize
-  const pdfStyles = useMemo(() => createDynamicStyles(fontSize), [fontSize]);
-  const webStyles = useMemo(() => createWebStyles(fontSize), [fontSize]);
-
   // Customizations
   const [customAspectRatios, setCustomAspectRatios] = useState<
     Map<string, number>
@@ -423,6 +396,30 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   const [groupLabelOverrides, setGroupLabelOverrides] = useState<
     Map<string, string>
   >(() => new Map(Object.entries(initialConfig.groupLabelOverrides)));
+
+  // Page presets, text boxes and backgrounds (TASKS.md goals 4-7)
+  const [pageLayouts, setPageLayouts] = useState<
+    Map<string, PageLayoutPreset>
+  >(() => new Map(Object.entries(initialConfig.pageLayouts)));
+  const [textBoxOverrides, setTextBoxOverrides] = useState<
+    Map<string, TextBoxOverride>
+  >(() => new Map(Object.entries(initialConfig.textBoxOverrides)));
+  const [pageBackgrounds, setPageBackgrounds] = useState<
+    Map<string, BackgroundSpec>
+  >(() => new Map(Object.entries(initialConfig.pageBackgrounds)));
+  const [defaultBackground, setDefaultBackground] = useState<BackgroundSpec>(
+    initialConfig.defaultBackground,
+  );
+  const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(
+    null,
+  );
+  const [textDragState, setTextDragState] = useState<{
+    id: string;
+    startX: number;
+    startY: number;
+    originalX: number;
+    originalY: number;
+  } | null>(null);
 
   // Drag state for reordering
   const [reorderDragState, setReorderDragState] = useState<{
@@ -493,6 +490,10 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       descriptionPositions: Object.fromEntries(descriptionPositions),
       pageAlignments: Object.fromEntries(pageAlignments),
       groupLabelOverrides: Object.fromEntries(groupLabelOverrides),
+      pageLayouts: Object.fromEntries(pageLayouts),
+      textBoxOverrides: Object.fromEntries(textBoxOverrides),
+      pageBackgrounds: Object.fromEntries(pageBackgrounds),
+      defaultBackground,
     };
     saveAlbumConfig(album.id, config);
   }, [
@@ -512,11 +513,15 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     groupingMode,
     layoutStyle,
     showGroupLabels,
+    defaultBackground,
     customAspectRatios,
     customOrdering,
     descriptionPositions,
     pageAlignments,
     groupLabelOverrides,
+    pageLayouts,
+    textBoxOverrides,
+    pageBackgrounds,
     isPageWidthValid,
     isPageHeightValid,
     isMarginValid,
@@ -626,36 +631,6 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     setDescriptionPositions(new Map());
   };
 
-  // Cycle description position
-  const handleDescriptionClick = (assetId: string, event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    // Find the asset to check if it has a description
-    const asset = filteredAssets.find((a) => a.id === assetId);
-    const hasDescription = !!asset?.exifInfo?.description;
-
-    // Build the cycle based on whether there's a description
-    const positions: Position[] = hasDescription
-      ? ["bottom", "top", "left", "right"]
-      : ["bottom", "top"];
-
-    const currentPosition = descriptionPositions.get(assetId) || "bottom";
-    const currentIndex = positions.indexOf(currentPosition);
-    const nextPosition = positions[(currentIndex + 1) % positions.length];
-
-    setDescriptionPositions((prev) => {
-      const next = new Map(prev);
-      if (nextPosition === "bottom") {
-        // Reset to default
-        next.delete(assetId);
-      } else {
-        next.set(assetId, nextPosition);
-      }
-      return next;
-    });
-  };
-
   // Filter assets based on user preferences (default order)
   const defaultFilteredAssets = useMemo(() => {
     return filterVideos
@@ -738,6 +713,15 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       layoutStyle,
       showGroupLabels,
       labelOverrides: Object.fromEntries(groupLabelOverrides),
+      showDates,
+      showDescriptions,
+      fontSize,
+      descriptionPosition: (assetId) =>
+        descriptionPositions.get(assetId) || "bottom",
+      textBoxOverrides: Object.fromEntries(textBoxOverrides),
+      pageLayouts: Object.fromEntries(pageLayouts),
+      defaultBackground,
+      pageBackgrounds: Object.fromEntries(pageBackgrounds),
     });
   }, [
     filteredAssets,
@@ -749,15 +733,116 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     combinePages,
     customAspectRatios,
     descriptionPositions,
+    showDates,
     showDescriptions,
+    fontSize,
     pageAlignments,
     groupingMode,
     layoutStyle,
     showGroupLabels,
     groupLabelOverrides,
+    textBoxOverrides,
+    pageLayouts,
+    defaultBackground,
+    pageBackgrounds,
   ]);
 
   const pages = book.pages;
+
+  const thumbnailUrl = (assetId: string) =>
+    `${immichConfig.baseUrl}/assets/${assetId}/thumbnail?size=preview&apiKey=${immichConfig.apiKey}`;
+
+  /** Shared background editor used for the album default and each page. */
+  const renderBackgroundEditor = (
+    spec: BackgroundSpec,
+    onChange: (spec: BackgroundSpec) => void,
+  ) => (
+    <div className="flex flex-wrap items-center gap-1">
+      <select
+        value={spec.type}
+        onChange={(event) => {
+          const type = event.target.value as "color" | "gradient" | "photo";
+          if (type === "color") {
+            onChange({ type: "color", color: "#ffffff" });
+          } else if (type === "gradient") {
+            onChange({ type: "gradient", preset: "light" });
+          } else {
+            onChange({
+              type: "photo",
+              assetId: filteredAssets[0]?.id ?? "",
+              dim: 0.2,
+            });
+          }
+        }}
+        className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+        title="Background type"
+      >
+        <option value="color">Colour</option>
+        <option value="gradient">Gradient</option>
+        <option value="photo">Photo</option>
+      </select>
+      {spec.type === "color" && (
+        <input
+          type="color"
+          value={spec.color}
+          onChange={(event) => onChange({ type: "color", color: event.target.value })}
+          className="h-6 w-8 border border-gray-300 rounded"
+          title="Background colour"
+        />
+      )}
+      {spec.type === "gradient" && (
+        <select
+          value={spec.preset}
+          onChange={(event) =>
+            onChange({
+              type: "gradient",
+              preset: event.target.value as GradientPresetId,
+            })
+          }
+          className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+          title="Gradient preset"
+        >
+          {GRADIENT_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+        </select>
+      )}
+      {spec.type === "photo" && (
+        <>
+          <select
+            value={spec.assetId}
+            onChange={(event) =>
+              onChange({ ...spec, assetId: event.target.value })
+            }
+            className="px-1 py-0.5 text-xs border border-gray-300 rounded max-w-40"
+            title="Background photo"
+          >
+            <option value="">Choose photo…</option>
+            {filteredAssets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.originalFileName}
+              </option>
+            ))}
+          </select>
+          <label className="text-xs text-gray-600">Dim</label>
+          <input
+            type="range"
+            min="0"
+            max="0.8"
+            step="0.05"
+            value={spec.dim}
+            onChange={(event) =>
+              onChange({ ...spec, dim: Number(event.target.value) })
+            }
+            className="w-16"
+            title="Darken the background photo"
+          />
+        </>
+      )}
+    </div>
+  );
 
   // Handle aspect ratio drag
   useEffect(() => {
@@ -818,6 +903,61 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [aspectDragState, contentWidth, margin]);
+
+  // Selected text box across all sheets (combined right halves included).
+  const selectedTextBox = useMemo(
+    () =>
+      selectedTextBoxId
+        ? (pages.flatMap((page) => page.textBoxes).find(
+            (box) => box.id === selectedTextBoxId,
+          ) ?? null)
+        : null,
+    [pages, selectedTextBoxId],
+  );
+
+  const updateTextBoxOverride = (
+    id: string,
+    patch: Partial<TextBoxOverride>,
+  ) => {
+    setTextBoxOverrides((prev) => {
+      const next = new Map(prev);
+      next.set(id, { ...prev.get(id), ...patch });
+      return next;
+    });
+  };
+
+  const resetTextBoxOverride = (id: string) => {
+    setTextBoxOverrides((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  // Drag a text box: screen (72 DPI) delta → page pixels (300 DPI).
+  useEffect(() => {
+    if (!textDragState) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const scale = 300 / 72;
+      const x =
+        textDragState.originalX + (event.clientX - textDragState.startX) * scale;
+      const y =
+        textDragState.originalY + (event.clientY - textDragState.startY) * scale;
+      updateTextBoxOverride(textDragState.id, {
+        x: Math.round(x),
+        y: Math.round(y),
+      });
+    };
+    const handleMouseUp = () => setTextDragState(null);
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [textDragState]);
 
   // Determine pageLayout based on combinePages setting
   const pageLayout = combinePages ? "singlePage" : "twoPageLeft";
@@ -1227,7 +1367,285 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
             </div>
           </div>
 
-          {/* 4. Customizations (only shown when there are any) */}
+          {/* 4. Page layouts, backgrounds and text boxes (goals 4-7) */}
+          <details className="p-2 bg-gray-50 rounded border border-gray-300">
+            <summary className="text-xs font-semibold text-gray-700 cursor-pointer select-none">
+              Page layouts &amp; backgrounds
+            </summary>
+            <div className="mt-2 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-gray-600 w-24">
+                  Default background
+                </span>
+                {renderBackgroundEditor(
+                  defaultBackground,
+                  setDefaultBackground,
+                )}
+              </div>
+              <div className="flex items-center justify-between border-t border-gray-200 pt-1">
+                <span className="text-xs text-gray-500">
+                  Overrides are keyed by each page's first photo.
+                </span>
+                <button
+                  onClick={() => {
+                    setPageLayouts(new Map());
+                    setPageBackgrounds(new Map());
+                  }}
+                  className="text-xs px-2 py-0.5 bg-red-500 hover:bg-red-600 text-white rounded-md transition-colors font-medium"
+                >
+                  Reset page overrides
+                </button>
+              </div>
+              <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
+                {book.logicalPages.map((logicalPage) => {
+                  const anchorId = logicalPage.anchorId;
+                  if (!anchorId) return null;
+                  const layout = pageLayouts.get(anchorId) ?? "auto";
+                  const background =
+                    pageBackgrounds.get(anchorId) ?? defaultBackground;
+
+                  return (
+                    <div
+                      key={anchorId}
+                      className="flex flex-wrap items-center gap-2 border-t border-gray-200 pt-1"
+                    >
+                      <span className="text-xs text-gray-600 w-14">
+                        Page {logicalPage.pageNumber}
+                      </span>
+                      <select
+                        value={layout}
+                        onChange={(event) => {
+                          const value = event.target.value as PageLayoutPreset;
+                          const next = new Map(pageLayouts);
+                          if (value === "auto") {
+                            next.delete(anchorId);
+                          } else {
+                            next.set(anchorId, value);
+                          }
+                          setPageLayouts(next);
+                        }}
+                        className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                        title="Layout preset for this page"
+                      >
+                        <option value="auto">Auto layout</option>
+                        {LAYOUT_PRESETS.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.name}
+                          </option>
+                        ))}
+                      </select>
+                      {renderBackgroundEditor(background, (spec) => {
+                        const next = new Map(pageBackgrounds);
+                        next.set(anchorId, spec);
+                        setPageBackgrounds(next);
+                      })}
+                      <button
+                        onClick={() => {
+                          const nextLayouts = new Map(pageLayouts);
+                          nextLayouts.delete(anchorId);
+                          setPageLayouts(nextLayouts);
+                          const nextBackgrounds = new Map(pageBackgrounds);
+                          nextBackgrounds.delete(anchorId);
+                          setPageBackgrounds(nextBackgrounds);
+                        }}
+                        className="text-xs px-2 py-0.5 bg-gray-500 hover:bg-gray-600 text-white rounded-md transition-colors"
+                        title="Reset this page's layout and background"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </details>
+
+          {/* Text box inspector (click a text box in the preview) */}
+          {selectedTextBox && (
+            <div className="p-2 bg-gray-50 rounded border border-blue-300">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-gray-700">
+                  Text box · {selectedTextBox.kind}
+                </h3>
+                <button
+                  onClick={() => resetTextBoxOverride(selectedTextBox.id)}
+                  className="text-xs px-2 py-0.5 bg-red-500 hover:bg-red-600 text-white rounded-md transition-colors font-medium"
+                  title="Reset this text box"
+                >
+                  Reset box
+                </button>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.text ??
+                    selectedTextBox.text
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      text: event.target.value,
+                    })
+                  }
+                  placeholder="Text (empty = generated)"
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded w-48"
+                  title="Text content; leave empty for the generated text"
+                />
+                <label className="text-xs text-gray-600">X</label>
+                <input
+                  type="number"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.x ??
+                    selectedTextBox.x
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      x: Number(event.target.value),
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded w-16"
+                />
+                <label className="text-xs text-gray-600">Y</label>
+                <input
+                  type="number"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.y ??
+                    selectedTextBox.y
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      y: Number(event.target.value),
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded w-16"
+                />
+                <label className="text-xs text-gray-600">W</label>
+                <input
+                  type="number"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.width ??
+                    selectedTextBox.width
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      width: Number(event.target.value),
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded w-16"
+                />
+                <select
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.fontFamily ??
+                    selectedTextBox.fontFamily
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      fontFamily: event.target
+                        .value as TextBox["fontFamily"],
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                  title="Font family"
+                >
+                  {TEXT_FONT_FAMILIES.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="6"
+                  max="72"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.fontSize ??
+                    selectedTextBox.fontSize
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      fontSize: Number(event.target.value),
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded w-14"
+                  title="Font size"
+                />
+                <input
+                  type="color"
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.color ??
+                    selectedTextBox.color
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      color: event.target.value,
+                    })
+                  }
+                  className="h-6 w-8 border border-gray-300 rounded"
+                  title="Text colour"
+                />
+                <select
+                  value={
+                    textBoxOverrides.get(selectedTextBox.id)?.align ??
+                    selectedTextBox.align
+                  }
+                  onChange={(event) =>
+                    updateTextBoxOverride(selectedTextBox.id, {
+                      align: event.target.value as TextBox["align"],
+                    })
+                  }
+                  className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                  title="Text alignment"
+                >
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select>
+                <label className="flex items-center gap-1 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={
+                      textBoxOverrides.get(selectedTextBox.id)?.hidden ?? false
+                    }
+                    onChange={(event) =>
+                      updateTextBoxOverride(selectedTextBox.id, {
+                        hidden: event.target.checked,
+                      })
+                    }
+                  />
+                  Hidden
+                </label>
+                {selectedTextBox.kind !== "caption" && (
+                  <select
+                    value={
+                      descriptionPositions.get(
+                        selectedTextBox.id.split(":")[1],
+                      ) || "bottom"
+                    }
+                    onChange={(event) => {
+                      const assetId = selectedTextBox.id.split(":")[1];
+                      const position = event.target.value as Position;
+                      const next = new Map(descriptionPositions);
+                      if (position === "bottom") {
+                        next.delete(assetId);
+                      } else {
+                        next.set(assetId, position);
+                      }
+                      setDescriptionPositions(next);
+                    }}
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                    title="Description/date position (changes the photo layout)"
+                  >
+                    <option value="bottom">Bottom</option>
+                    <option value="top">Top</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                  </select>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 5. Customizations (only shown when there are any) */}
           {(customAspectRatios.size > 0 ||
             customOrdering !== null ||
             descriptionPositions.size > 0) && (
@@ -1324,6 +1742,88 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                       />
                     )}
 
+                    {/* Page background (goal 7): colour, gradient or photo */}
+                    {pageData.backgrounds.map((background, index) => {
+                      const count = pageData.backgrounds.length;
+                      const halfWidth = pageWidth / count;
+                      const left = index * halfWidth;
+                      const backgroundStyle = {
+                        position: "absolute" as const,
+                        left,
+                        top: 0,
+                        width: halfWidth,
+                        height: pageHeight,
+                      };
+
+                      if (background.type === "color") {
+                        return (
+                          <View
+                            key={`background-${index}`}
+                            style={[
+                              backgroundStyle,
+                              { backgroundColor: background.color },
+                            ]}
+                          />
+                        );
+                      }
+
+                      if (background.type === "gradient") {
+                        const gradient = pdfGradient(background);
+                        if (!gradient) return null;
+                        const id = `gradient-${pageData.pageNumber}-${index}`;
+                        const coordinates = gradientCoordinates(gradient.angle);
+                        return (
+                          <Svg
+                            key={id}
+                            style={backgroundStyle}
+                            viewBox={`0 0 ${halfWidth} ${pageHeight}`}
+                          >
+                            <Defs>
+                              <LinearGradient id={id} {...coordinates}>
+                                <Stop offset="0%" stopColor={gradient.from} />
+                                <Stop offset="100%" stopColor={gradient.to} />
+                              </LinearGradient>
+                            </Defs>
+                            <Rect
+                              x={0}
+                              y={0}
+                              width={halfWidth}
+                              height={pageHeight}
+                              fill={`url(#${id})`}
+                            />
+                          </Svg>
+                        );
+                      }
+
+                      return (
+                        <View key={`background-${index}`} style={backgroundStyle}>
+                          {background.assetId ? (
+                            <Image
+                              src={thumbnailUrl(background.assetId)}
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "cover",
+                              }}
+                            />
+                          ) : null}
+                          {background.dim > 0 && (
+                            <View
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                top: 0,
+                                right: 0,
+                                bottom: 0,
+                                backgroundColor: "#000000",
+                                opacity: background.dim,
+                              }}
+                            />
+                          )}
+                        </View>
+                      );
+                    })}
+
                     {pageData.photos.map((photoBox) => {
                       const imageUrl = `${immichConfig.baseUrl}/assets/${photoBox.asset.id}/thumbnail?size=preview&apiKey=${immichConfig.apiKey}`;
                       const descPosition =
@@ -1355,29 +1855,6 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
 
                       return (
                         <View key={photoBox.asset.id} style={containerStyle}>
-                          {/* Description on left - absolutely positioned */}
-                          {hasDescription && descPosition === "left" && (
-                            <View
-                              style={[
-                                pdfStyles.descriptionSide,
-                                {
-                                  position: "absolute",
-                                  left: 0,
-                                  top: 0,
-                                  width: imageWidth,
-                                  height: toPoints(photoBox.height),
-                                },
-                              ]}
-                            >
-                              <Text
-                                hyphenationCallback={(word) => [word]}
-                                style={pdfStyles.text}
-                              >
-                                {photoBox.asset.exifInfo?.description}
-                              </Text>
-                            </View>
-                          )}
-
                           {/* Image - absolutely positioned */}
                           <Image
                             src={imageUrl}
@@ -1395,133 +1872,32 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                                 : staticStyles.photo
                             }
                           />
-
-                          {/* Description on right - absolutely positioned */}
-                          {hasDescription && descPosition === "right" && (
-                            <View
-                              style={[
-                                pdfStyles.descriptionSide,
-                                {
-                                  position: "absolute",
-                                  right: 0,
-                                  top: 0,
-                                  width: imageWidth,
-                                  height: toPoints(photoBox.height),
-                                },
-                              ]}
-                            >
-                              <Text
-                                hyphenationCallback={(word) => [word]}
-                                style={pdfStyles.text}
-                              >
-                                {photoBox.asset.exifInfo?.description}
-                              </Text>
-                            </View>
-                          )}
-
-                          {/* Date - absolutely positioned */}
-                          {showDates && photoBox.asset.fileCreatedAt && (
-                            <View
-                              style={(() => {
-                                switch (descPosition) {
-                                  case "bottom":
-                                    return {
-                                      ...pdfStyles.dateOverlay,
-                                      position: "absolute",
-                                      top: 8,
-                                      right: 8,
-                                    };
-                                  case "top":
-                                    return {
-                                      ...pdfStyles.dateOverlay,
-                                      position: "absolute",
-                                      bottom: 8,
-                                      right: 8,
-                                    };
-                                  case "left":
-                                    return {
-                                      position: "absolute",
-                                      top: 16,
-                                      left: 8,
-                                    };
-                                  case "right":
-                                    return {
-                                      position: "absolute",
-                                      top: 16,
-                                      left: imageWidth + 8,
-                                    };
-                                  default:
-                                    return {
-                                      ...pdfStyles.dateOverlay,
-                                      position: "absolute",
-                                      top: 8,
-                                      right: 8,
-                                    };
-                                }
-                              })()}
-                            >
-                              <Text style={pdfStyles.text}>
-                                {new Date(
-                                  photoBox.asset.fileCreatedAt,
-                                ).toLocaleDateString(undefined, {
-                                  year: "numeric",
-                                  month: "short",
-                                  day: "numeric",
-                                })}
-                              </Text>
-                            </View>
-                          )}
-
-                          {/* Description for top/bottom positions */}
-                          {hasDescription &&
-                            (descPosition === "top" ||
-                              descPosition === "bottom") && (
-                              <Text
-                                hyphenationCallback={(word) => [word]}
-                                style={{
-                                  ...pdfStyles.descriptionOverlay,
-                                  position: "absolute",
-                                  ...(descPosition === "top"
-                                    ? { top: 0 }
-                                    : { bottom: 0 }),
-                                  left: 0,
-                                  right: 0,
-                                }}
-                              >
-                                {photoBox.asset.exifInfo?.description}
-                              </Text>
-                            )}
                         </View>
                       );
                     })}
 
-                    {/* Automatic group caption (TASKS.md goal 3) */}
-                    {pageData.groupLabel && (
+                    {/* Text boxes (goals 4 & 6): rendered after photos so
+                        text never ends up hidden under an image. */}
+                    {pageData.textBoxes.map((box) => (
                       <Text
+                        key={box.id}
+                        hyphenationCallback={(word) => [word]}
                         style={{
-                          ...pdfStyles.groupLabel,
                           position: "absolute",
-                          bottom: toPoints(validMargin) / 2,
-                          left: 0,
-                          width: combinePages ? pageWidth / 2 : pageWidth,
+                          left: toPoints(box.x),
+                          top: toPoints(box.y),
+                          width: toPoints(box.width),
+                          fontFamily: box.fontFamily,
+                          fontSize: box.fontSize,
+                          color: box.color,
+                          textAlign: box.align as "left" | "center" | "right",
+                          backgroundColor: box.backgroundColor,
+                          lineHeight: 1.3,
                         }}
                       >
-                        {pageData.groupLabel}
+                        {box.text}
                       </Text>
-                    )}
-                    {combinePages && pageData.groupLabelRight && (
-                      <Text
-                        style={{
-                          ...pdfStyles.groupLabel,
-                          position: "absolute",
-                          bottom: toPoints(validMargin) / 2,
-                          left: pageWidth / 2,
-                          width: pageWidth / 2,
-                        }}
-                      >
-                        {pageData.groupLabelRight}
-                      </Text>
-                    )}
+                    ))}
                   </Page>
                 );
               })}
@@ -1744,6 +2120,29 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                     height: `${displayHeight}px`,
                   }}
                 >
+                  {/* Page background (goal 7) */}
+                  {page.backgrounds.map((background, index) => {
+                    const count = page.backgrounds.length;
+                    const width = displayWidth / count;
+                    const left = index * width;
+                    return (
+                      <div
+                        key={`background-${index}`}
+                        className="absolute top-0"
+                        style={{
+                          left: `${left}px`,
+                          width: `${width}px`,
+                          height: `${displayHeight}px`,
+                          zIndex: 0,
+                          ...backgroundCss(
+                            background,
+                            background.type === "photo" ? thumbnailUrl(background.assetId) : undefined,
+                          ),
+                        }}
+                      />
+                    );
+                  })}
+                  
                   {/* Page break indicator for combined pages */}
                   {combinePages && (
                     <div
@@ -1752,34 +2151,7 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                     />
                   )}
 
-                  {/* Automatic group caption (TASKS.md goal 3) */}
-                  {page.groupLabel && (
-                    <div
-                      className="absolute bottom-0 left-0 pointer-events-none"
-                      style={{
-                        width: combinePages
-                          ? `${displayWidth / 2}px`
-                          : `${displayWidth}px`,
-                        paddingBottom: `${toPoints(validMargin) / 2}px`,
-                        ...webStyles.groupLabel,
-                      }}
-                    >
-                      {page.groupLabel}
-                    </div>
-                  )}
-                  {combinePages && page.groupLabelRight && (
-                    <div
-                      className="absolute bottom-0 pointer-events-none"
-                      style={{
-                        left: `${displayWidth / 2}px`,
-                        width: `${displayWidth / 2}px`,
-                        paddingBottom: `${toPoints(validMargin) / 2}px`,
-                        ...webStyles.groupLabel,
-                      }}
-                    >
-                      {page.groupLabelRight}
-                    </div>
-                  )}
+                  {/* Page background already drawn above; photos come next. */}
 
                   {/* Photos */}
                   {page.photos.map((photoBox) => {
@@ -1870,22 +2242,9 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                           <div className="absolute left-0 top-0 bottom-0 w-1 bg-green-500 shadow-lg z-10" />
                         )}
 
-                        {/* Description on left (when position is 'left') */}
-                        {hasDescription && descPosition === "left" && (
-                          <div
-                            className="text-black cursor-pointer bg-gray-100 hover:bg-gray-200 transition-colors flex items-center justify-center"
-                            style={{
-                              width: `${imageWidth}px`,
-                              flexShrink: 0,
-                              ...webStyles.descriptionSide,
-                            }}
-                            onClick={(e) =>
-                              handleDescriptionClick(photoBox.asset.id, e)
-                            }
-                            title="Click to change position"
-                          >
-                            {photoBox.asset.exifInfo?.description}
-                          </div>
+                        {/* Spacer for left-side descriptions (text is now a text box) */}
+                        {isLeftRight && descPosition === "left" && (
+                          <div style={{ width: `${imageWidth}px`, flexShrink: 0 }} />
                         )}
 
                         <img
@@ -1899,133 +2258,11 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                           }
                           loading="lazy"
                         />
-                        {showDates &&
-                          photoBox.asset.fileCreatedAt &&
-                          (() => {
-                            const getDateConfig = () => {
-                              switch (descPosition) {
-                                case "bottom":
-                                  return {
-                                    className:
-                                      "absolute top-2 right-2 bg-white/70 text-black backdrop-blur-sm cursor-pointer hover:bg-white/80 transition-colors",
-                                    style: webStyles.date,
-                                  };
-                                case "top":
-                                  return {
-                                    className:
-                                      "absolute bottom-2 right-2 bg-white/70 text-black backdrop-blur-sm cursor-pointer hover:bg-white/80 transition-colors",
-                                    style: webStyles.date,
-                                  };
-                                case "left":
-                                  return {
-                                    className:
-                                      "absolute top-4 left-2 text-black cursor-pointer",
-                                    style: webStyles.date,
-                                  };
-                                case "right":
-                                  return {
-                                    className:
-                                      "absolute top-4 text-black cursor-pointer",
-                                    style: {
-                                      ...webStyles.date,
-                                      left: `${imageWidth + 8}px`,
-                                    },
-                                  };
-                                default:
-                                  return {
-                                    className:
-                                      "absolute top-2 right-2 bg-white/70 text-black backdrop-blur-sm cursor-pointer hover:bg-white/80 transition-colors",
-                                    style: webStyles.date,
-                                  };
-                              }
-                            };
-                            const config = getDateConfig();
-                            return (
-                              <div
-                                className={config.className}
-                                style={config.style}
-                                onClick={(e) =>
-                                  handleDescriptionClick(photoBox.asset.id, e)
-                                }
-                                title="Click to change position"
-                              >
-                                {new Date(
-                                  photoBox.asset.fileCreatedAt,
-                                ).toLocaleDateString(undefined, {
-                                  year: "numeric",
-                                  month: "short",
-                                  day: "numeric",
-                                })}
-                              </div>
-                            );
-                          })()}
-                        {showDescriptions &&
-                          photoBox.asset.exifInfo?.description &&
-                          (() => {
-                            const descPosition =
-                              descriptionPositions.get(photoBox.asset.id) ||
-                              "bottom";
-                            const description =
-                              photoBox.asset.exifInfo?.description;
-
-                            if (
-                              descPosition === "left" ||
-                              descPosition === "right"
-                            ) {
-                              // For left/right: description is next to image, not overlaid
-                              return null;
-                            }
-
-                            const getDescriptionConfig = () => {
-                              switch (descPosition) {
-                                case "top":
-                                  return {
-                                    className:
-                                      "absolute top-0 left-0 right-0 bg-white/70 text-black cursor-pointer hover:bg-white/80 transition-colors z-10",
-                                    style: webStyles.description,
-                                  };
-                                case "bottom":
-                                default:
-                                  return {
-                                    className:
-                                      "absolute bottom-0 left-0 right-0 bg-white/70 text-black cursor-pointer hover:bg-white/80 transition-colors z-10",
-                                    style: webStyles.description,
-                                  };
-                              }
-                            };
-
-                            const config = getDescriptionConfig();
-
-                            return (
-                              <div
-                                className={config.className}
-                                style={config.style}
-                                onClick={(e) =>
-                                  handleDescriptionClick(photoBox.asset.id, e)
-                                }
-                                title="Click to change position"
-                              >
-                                {description}
-                              </div>
-                            );
-                          })()}
-
-                        {/* Description on right (when position is 'right') */}
-                        {hasDescription && descPosition === "right" && (
-                          <div
-                            className="text-black cursor-pointer bg-gray-100 hover:bg-gray-200 transition-colors flex items-center justify-center"
-                            style={{
-                              width: `${imageWidth}px`,
-                              flexShrink: 0,
-                              ...webStyles.descriptionSide,
-                            }}
-                            onClick={(e) =>
-                              handleDescriptionClick(photoBox.asset.id, e)
-                            }
-                            title="Click to change position"
-                          >
-                            {photoBox.asset.exifInfo?.description}
-                          </div>
+                        {/* Dates are now rendered as text boxes */}
+                        {/* Descriptions are now rendered as text boxes */}
+                        {/* Spacer for right-side descriptions (text is now a text box) */}
+                        {isLeftRight && descPosition === "right" && (
+                          <div style={{ width: `${imageWidth}px`, flexShrink: 0 }} />
                         )}
 
                         {/* Customization indicators */}
@@ -2136,6 +2373,51 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                       </div>
                     );
                   })}
+                  {/* Text boxes (goals 4 & 6): drawn after photos so text
+                    never ends up hidden under an image. */}
+                  {page.textBoxes.map((box) => (
+                    <div
+                      key={box.id}
+                      className={`absolute cursor-move ${
+                        selectedTextBoxId === box.id
+                          ? "ring-2 ring-blue-500"
+                          : ""
+                      }`}
+                      style={{
+                        left: `${toPoints(box.x)}px`,
+                        top: `${toPoints(box.y)}px`,
+                        width: `${toPoints(box.width)}px`,
+                        fontFamily: fontCss(box.fontFamily),
+                        fontSize: `${box.fontSize}px`,
+                        color: box.color,
+                        textAlign: box.align,
+                        backgroundColor: box.backgroundColor,
+                        whiteSpace: "pre-wrap",
+                        lineHeight: 1.3,
+                        zIndex: 20,
+                        padding: "2px 4px",
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedTextBoxId(box.id);
+                      }}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedTextBoxId(box.id);
+                        setTextDragState({
+                          id: box.id,
+                          startX: event.clientX,
+                          startY: event.clientY,
+                          originalX: box.x,
+                          originalY: box.y,
+                        });
+                      }}
+                    >
+                      {box.text}
+                    </div>
+                  ))}
+
                 </div>
               </div>
             );

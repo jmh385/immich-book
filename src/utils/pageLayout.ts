@@ -1,5 +1,6 @@
 import { JustifiedLayout } from "@immich/justified-layout-wasm";
 import type { AssetResponseDto } from "@immich/sdk";
+import { presetSlots, type PageLayoutPreset } from "./layoutPresets";
 
 export interface PageSize {
   width: number; // in pixels
@@ -89,6 +90,11 @@ export interface LayoutOptions {
   segmentStyles?: LayoutStyle[];
   /** Caption per group; shown on the first page of each group. */
   groupLabels?: (string | null)[];
+  /**
+   * Per-page layout preset overrides, keyed by the page's first asset id
+   * (TASKS.md goal 5). "auto" keeps the group's style.
+   */
+  pageLayouts?: Record<string, PageLayoutPreset>;
 }
 
 /**
@@ -235,62 +241,115 @@ export function calculatePageLayout(
 
   // Run the segment layouts and paginate their boxes into pages.
   const pages: Page[] = [];
-  const pageState: { current: Page | null; topY: number } = {
-    current: null,
-    topY: 0,
-  };
+  let currentPage: Page | null = null;
 
   const flushPage = () => {
-    if (pageState.current && pageState.current.photos.length > 0) {
-      pages.push(pageState.current);
+    if (currentPage && currentPage.photos.length > 0) {
+      pages.push(currentPage);
     }
-    pageState.current = null;
+    currentPage = null;
   };
 
   const startPage = (label?: string) => {
     flushPage();
-    pageState.current = {
+    currentPage = {
       pageNumber: pages.length + 1,
       photos: [],
       width: pageDimensions.width,
       height: pageDimensions.height,
       ...(label !== undefined ? { groupLabel: label } : {}),
     };
-    pageState.topY = 0;
+  };
+
+  const pageGuard = () => currentPage as Page;
+
+  // Group boxes into rows (same y, small tolerance); rows stay in asset order.
+  const groupRows = (boxes: Box[]): Box[][] => {
+    const rows: Box[][] = [];
+    for (const box of boxes) {
+      const row = rows.find(
+        (candidate) => Math.abs(candidate[0].y - box.y) <= 1,
+      );
+      if (row) {
+        row.push(box);
+      } else {
+        rows.push([box]);
+      }
+    }
+    return rows;
+  };
+
+  // Boxes that fit on one page: whole rows while the content area lasts.
+  // Spotlight keeps exactly one photo per page.
+  const boxesForPage = (
+    boxes: Box[],
+    style: LayoutStyle,
+    contentHeightLimit: number,
+  ): Box[] => {
+    if (style === "spotlight") return boxes.slice(0, 1);
+
+    const taken: Box[] = [];
+    for (const row of groupRows(boxes)) {
+      const rowBottom = Math.max(...row.map((box) => box.y + box.height));
+      if (taken.length > 0 && rowBottom > contentHeightLimit) break;
+      taken.push(...row);
+    }
+    return taken;
   };
 
   segments.forEach((segment, segmentIndex) => {
     const style: LayoutStyle =
       options.segmentStyles?.[segmentIndex] ?? "justified";
-    const segmentAssets = assets.slice(segment.start, segment.end);
     const label = options.groupLabels?.[segmentIndex] ?? undefined;
+    let remaining = assets.slice(segment.start, segment.end);
+    let firstPageOfGroup = true;
 
-    // A group always starts on a fresh page.
-    startPage(label);
-    const pageGuard = () => pageState.current as Page;
+    while (remaining.length > 0) {
+      const anchorId = remaining[0].id;
+      const preset = options.pageLayouts?.[anchorId];
 
-    for (const box of boxesForSegment(segmentAssets, style)) {
-      const photoBottom = box.y + box.height;
+      // A group always starts on a fresh page; its label only on page one.
+      startPage(firstPageOfGroup ? label : undefined);
+      firstPageOfGroup = false;
 
-      // Spotlight photos each get their own page; other styles paginate rows
-      // until the content area is full.
-      if (
-        pageGuard().photos.length > 0 &&
-        (style === "spotlight" || photoBottom - pageState.topY > contentHeight)
-      ) {
-        startPage();
-        if (box.y > pageState.topY) {
-          pageState.topY = box.y;
+      if (preset && preset !== "auto") {
+        // Preset page: consume as many photos as it has slots.
+        const slots = presetSlots(
+          preset,
+          contentWidth,
+          contentHeight,
+          spacing,
+        );
+        const count = Math.min(slots.length, remaining.length);
+        for (let i = 0; i < count; i++) {
+          pageGuard().photos.push({
+            asset: remaining[i],
+            x: slots[i].x + margin,
+            y: slots[i].y + margin,
+            width: slots[i].width,
+            height: slots[i].height,
+          });
         }
+        remaining = remaining.slice(count);
+        continue;
       }
 
-      (pageGuard() as Page).photos.push({
-        asset: box.asset,
-        x: box.x + margin,
-        y: box.y - pageState.topY + margin,
-        width: box.width,
-        height: box.height,
-      });
+      const boxes = boxesForPage(
+        boxesForSegment(remaining, style),
+        style,
+        contentHeight,
+      );
+      for (const box of boxes) {
+        pageGuard().photos.push({
+          asset: box.asset,
+          x: box.x + margin,
+          y: box.y + margin,
+          width: box.width,
+          height: box.height,
+        });
+      }
+      // Always make progress, even for a single oversized photo.
+      remaining = remaining.slice(Math.max(1, boxes.length));
     }
   });
   flushPage();

@@ -10,7 +10,7 @@ Keep this file current: new goals go on top, completed items move to
 
 ## Open
 
-Follow-ups from the completed goals below; none block the fork's main needs.
+### Follow-ups from completed goals
 
 - [ ] GPS clustering for photos without EXIF city/state/country (grouping uses
       city → state → country only, no coordinate clustering).
@@ -70,3 +70,33 @@ Follow-ups from the completed goals below; none block the fork's main needs.
   tasks 1–3 build on them without regressing them.
 - Tests: `npm test` (Jest). `npm test -- exampleBook` regenerates the runnable
   example in `example/` without an Immich server.
+- `tsconfig.json` includes `src` and `__mocks__`; `strict` + `noImplicitAny` are
+  on. Do not introduce `any`; prefer precise interfaces or `unknown` + narrowing.
+
+### 4. Individually editable text boxes — done
+
+- Shared `TextBox` model in `src/utils/textBoxes.ts`, rendered by both preview
+  and PDF after photos (fixes text-under-image stacking).
+- Per-box overrides (text, x, y, width, font family, size, colour, alignment,
+  hidden) keyed by `kind:assetId`, persisted per album; click a box in the
+  preview to edit it, drag to move.
+- Defaults reproduce the previous date/description/caption output.
+
+### 5. Richer page layouts with per-page control — done
+
+- `src/utils/layoutPresets.ts` defines 10 preset grids; `pageLayout.ts`
+  paginates preset pages alongside the existing justified engine.
+- Per-page override selector in the preview, keyed by the page's first asset id,
+  persisted per album ("Auto" + presets).
+
+### 6. Bug: text hidden under images — done
+
+- Text boxes are drawn after photos in both renderers with explicit z-index;
+  captions now live in the reserved margin strip as text boxes.
+
+### 7. Per-page background customization — done
+
+- `src/utils/backgrounds.ts` models colour / gradient (PowerPoint-like presets)
+  / photo backgrounds with preview CSS, PDF SVG gradients and full-page images,
+  plus a contrast helper.
+- Album default plus per-page overrides, keyed by the page's first asset id.

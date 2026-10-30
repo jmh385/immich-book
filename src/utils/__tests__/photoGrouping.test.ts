@@ -18,11 +18,13 @@ describe("asset facts", () => {
   });
 
   it("falls back to fileCreatedAt", () => {
-    const asset = testAsset({
-      day: "2026-07-14",
-      localDateTime: null,
-    });
-    expect(assetLocalDay(asset)).toBe("2026-07-14");
+    // GroupableAsset deliberately allows a missing local timestamp.
+    expect(
+      assetLocalDay({
+        id: "no-local-time",
+        fileCreatedAt: "2026-07-14T12:00:00.000Z",
+      }),
+    ).toBe("2026-07-14");
   });
 
   it("prefers city over state over country for the location", () => {

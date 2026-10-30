@@ -67,7 +67,13 @@ describe("buildBookLayout", () => {
         layoutStyle: "auto",
         showGroupLabels: true,
       }),
-    ).toEqual({ pages: [], groups: [], styles: [], labels: [] });
+    ).toEqual({
+      pages: [],
+      logicalPages: [],
+      groups: [],
+      styles: [],
+      labels: [],
+    });
   });
 
   it("groups by day and starts each group on a new page", () => {
