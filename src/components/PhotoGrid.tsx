@@ -15,10 +15,14 @@ import {
   Font,
 } from "@react-pdf/renderer";
 import {
-  calculatePageLayout,
   PAGE_SIZES,
   type PageAlignment,
 } from "../utils/pageLayout";
+import {
+  buildBookLayout,
+  type GroupingMode,
+  type LayoutStyleChoice,
+} from "../utils/book";
 import type { ImmichConfig } from "./ConnectionForm";
 import roboto400 from "@fontsource/roboto/files/roboto-latin-400-normal.woff?url";
 import roboto500 from "@fontsource/roboto/files/roboto-latin-500-normal.woff?url";
@@ -64,6 +68,11 @@ interface GlobalConfig {
   showDates: boolean;
   showDescriptions: boolean;
   fontSize: number;
+
+  // Automatic grouping and layout (TASKS.md goals 1-3)
+  groupingMode: GroupingMode;
+  layoutStyle: LayoutStyleChoice;
+  showGroupLabels: boolean;
 }
 
 interface AlbumConfig extends GlobalConfig {
@@ -72,6 +81,8 @@ interface AlbumConfig extends GlobalConfig {
   customOrdering: string[] | null;
   descriptionPositions: Record<string, Position>;
   pageAlignments: Record<number, PageAlignment>;
+  /** Manual caption overrides keyed by the group's first asset id. */
+  groupLabelOverrides: Record<string, string>;
 }
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
@@ -87,6 +98,9 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   showDates: true,
   showDescriptions: true,
   fontSize: 12,
+  groupingMode: "auto",
+  layoutStyle: "auto",
+  showGroupLabels: true,
 };
 
 // Helper functions for config persistence
@@ -123,6 +137,7 @@ function loadAlbumConfig(albumId: string): AlbumConfig {
         customOrdering: null,
         descriptionPositions: {},
         pageAlignments: {},
+        groupLabelOverrides: {},
         ...albumSpecific,
       };
     }
@@ -136,6 +151,7 @@ function loadAlbumConfig(albumId: string): AlbumConfig {
     customOrdering: null,
     descriptionPositions: {},
     pageAlignments: {},
+    groupLabelOverrides: {},
   };
 }
 
@@ -160,6 +176,9 @@ function saveAlbumConfig(albumId: string, config: AlbumConfig) {
       showDates: config.showDates,
       showDescriptions: config.showDescriptions,
       fontSize: config.fontSize,
+      groupingMode: config.groupingMode,
+      layoutStyle: config.layoutStyle,
+      showGroupLabels: config.showGroupLabels,
     };
     saveGlobalConfig(globalConfig);
   } catch (e) {
@@ -224,6 +243,15 @@ const createDynamicStyles = (fontSize: number) => {
       justifyContent: "center" as const,
       backgroundColor: "#F3F4F6",
     },
+    // Automatic group caption (TASKS.md goal 3)
+    groupLabel: {
+      color: "#4B5563",
+      fontSize: fontSize,
+      fontFamily: "Roboto",
+      lineHeight: 1,
+      letterSpacing: 0.2,
+      textAlign: "center" as const,
+    },
   };
 };
 
@@ -254,6 +282,16 @@ const createWebStyles = (fontSize: number) => {
       padding: `${basePadding}px`,
       lineHeight: 1,
     },
+    // Automatic group caption (TASKS.md goal 3)
+    groupLabel: {
+      hyphens: "none" as const,
+      wordWrap: "break-word" as const,
+      fontSize: `${fontSize}px`,
+      lineHeight: 1,
+      letterSpacing: 0.2,
+      color: "#4B5563",
+      textAlign: "center" as const,
+    },
   };
 };
 
@@ -272,6 +310,7 @@ async function fetchAlbumAssets(albumId: string): Promise<AssetResponseDto[]> {
       metadataSearchDto: {
         albumIds: [albumId],
         withExif: true,
+        withPeople: true,
         size: ALBUM_SEARCH_PAGE_SIZE,
         page,
       },
@@ -344,6 +383,17 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   );
   const [fontSize, setFontSize] = useState(initialConfig.fontSize);
 
+  // Automatic grouping and layout (TASKS.md goals 1-3)
+  const [groupingMode, setGroupingMode] = useState<GroupingMode>(
+    initialConfig.groupingMode,
+  );
+  const [layoutStyle, setLayoutStyle] = useState<LayoutStyleChoice>(
+    initialConfig.layoutStyle,
+  );
+  const [showGroupLabels, setShowGroupLabels] = useState(
+    initialConfig.showGroupLabels,
+  );
+
   // Create dynamic styles based on current fontSize
   const pdfStyles = useMemo(() => createDynamicStyles(fontSize), [fontSize]);
   const webStyles = useMemo(() => createWebStyles(fontSize), [fontSize]);
@@ -369,6 +419,10 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
         ]),
       ),
   );
+  // Manual caption overrides per group (keyed by the group's first asset id).
+  const [groupLabelOverrides, setGroupLabelOverrides] = useState<
+    Map<string, string>
+  >(() => new Map(Object.entries(initialConfig.groupLabelOverrides)));
 
   // Drag state for reordering
   const [reorderDragState, setReorderDragState] = useState<{
@@ -431,10 +485,14 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       showDates,
       showDescriptions,
       fontSize,
+      groupingMode,
+      layoutStyle,
+      showGroupLabels,
       customAspectRatios: Object.fromEntries(customAspectRatios),
       customOrdering,
       descriptionPositions: Object.fromEntries(descriptionPositions),
       pageAlignments: Object.fromEntries(pageAlignments),
+      groupLabelOverrides: Object.fromEntries(groupLabelOverrides),
     };
     saveAlbumConfig(album.id, config);
   }, [
@@ -451,10 +509,14 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     showDates,
     showDescriptions,
     fontSize,
+    groupingMode,
+    layoutStyle,
+    showGroupLabels,
     customAspectRatios,
     customOrdering,
     descriptionPositions,
     pageAlignments,
+    groupLabelOverrides,
     isPageWidthValid,
     isPageHeightValid,
     isMarginValid,
@@ -629,7 +691,9 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   }, [validPageWidth, validMargin]);
 
   // Calculate unified page layout - single source of truth!
-  const pages = useMemo(() => {
+  // Automatic grouping, layout styles and group captions are resolved here,
+  // so the web preview and the PDF render exactly the same book.
+  const book = useMemo(() => {
     // Adjust aspect ratios for assets with left/right description positions
     const adjustedAspectRatios = new Map(customAspectRatios);
 
@@ -659,7 +723,7 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       }
     });
 
-    return calculatePageLayout(filteredAssets, {
+    return buildBookLayout(filteredAssets, {
       pageSize: "CUSTOM",
       orientation: "portrait",
       margin: validMargin,
@@ -670,6 +734,10 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       combinePages,
       customAspectRatios: adjustedAspectRatios,
       pageAlignments,
+      groupingMode,
+      layoutStyle,
+      showGroupLabels,
+      labelOverrides: Object.fromEntries(groupLabelOverrides),
     });
   }, [
     filteredAssets,
@@ -683,7 +751,13 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     descriptionPositions,
     showDescriptions,
     pageAlignments,
+    groupingMode,
+    layoutStyle,
+    showGroupLabels,
+    groupLabelOverrides,
   ]);
+
+  const pages = book.pages;
 
   // Handle aspect ratio drag
   useEffect(() => {
@@ -799,6 +873,49 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
             {filteredAssets.length !== assets.length && `of ${assets.length}`}{" "}
             assets
           </p>
+          {groupingMode !== "off" && book.groups.length > 0 && (
+            <p className="text-xs text-gray-500 mt-1">
+              {book.groups.length}{" "}
+              {book.groups.length === 1 ? "group" : "groups"} ·{" "}
+              {(["spotlight", "mixed", "justified"] as const)
+                .map((style) => {
+                  const count = book.styles.filter((s) => s === style).length;
+                  return count > 0 ? `${count} ${style}` : null;
+                })
+                .filter(Boolean)
+                .join(", ")}
+            </p>
+          )}
+          {groupingMode !== "off" &&
+            showGroupLabels &&
+            book.groups.length > 0 && (
+              <details className="mt-2 text-xs text-gray-600">
+                <summary className="cursor-pointer select-none text-gray-500">
+                  Edit group captions
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {book.groups.map((group, index) => (
+                    <input
+                      key={group.id}
+                      type="text"
+                      value={groupLabelOverrides.get(group.firstAssetId) ?? ""}
+                      placeholder={book.labels[index] ?? ""}
+                      onChange={(e) => {
+                        const next = new Map(groupLabelOverrides);
+                        if (e.target.value.trim()) {
+                          next.set(group.firstAssetId, e.target.value);
+                        } else {
+                          next.delete(group.firstAssetId);
+                        }
+                        setGroupLabelOverrides(next);
+                      }}
+                      className="w-full px-1 py-0.5 text-xs border border-gray-300 rounded"
+                      title="Leave empty to use the generated caption"
+                    />
+                  ))}
+                </div>
+              </details>
+            )}
 
           {/* Generate PDF / Back to Edit button */}
           <div className="mt-4">
@@ -976,6 +1093,25 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                   />
                   <span className="text-xs text-gray-500">px</span>
                 </div>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="layoutStyle" className="text-gray-600 text-xs">
+                    Style:
+                  </label>
+                  <select
+                    id="layoutStyle"
+                    value={layoutStyle}
+                    onChange={(e) =>
+                      setLayoutStyle(e.target.value as LayoutStyleChoice)
+                    }
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                    title="Page style per group; auto picks one from the group size"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="justified">Justified rows</option>
+                    <option value="mixed">Large photo + rows</option>
+                    <option value="spotlight">One per page</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -1051,6 +1187,41 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                     <option value="22">22 pt</option>
                     <option value="24">24 pt</option>
                   </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="groupingMode" className="text-gray-600 text-xs">
+                    Grouping:
+                  </label>
+                  <select
+                    id="groupingMode"
+                    value={groupingMode}
+                    onChange={(e) =>
+                      setGroupingMode(e.target.value as GroupingMode)
+                    }
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                    title="Split the album into pages by day, location or people"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="off">Off</option>
+                    <option value="day">By day</option>
+                    <option value="location">By location</option>
+                    <option value="person">By person</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    id="showGroupLabels"
+                    checked={showGroupLabels}
+                    onChange={(e) => setShowGroupLabels(e.target.checked)}
+                    className="h-3 w-3"
+                  />
+                  <label
+                    htmlFor="showGroupLabels"
+                    className="text-xs text-gray-700"
+                  >
+                    Group Captions
+                  </label>
                 </div>
               </div>
             </div>
@@ -1323,6 +1494,34 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                         </View>
                       );
                     })}
+
+                    {/* Automatic group caption (TASKS.md goal 3) */}
+                    {pageData.groupLabel && (
+                      <Text
+                        style={{
+                          ...pdfStyles.groupLabel,
+                          position: "absolute",
+                          bottom: toPoints(validMargin) / 2,
+                          left: 0,
+                          width: combinePages ? pageWidth / 2 : pageWidth,
+                        }}
+                      >
+                        {pageData.groupLabel}
+                      </Text>
+                    )}
+                    {combinePages && pageData.groupLabelRight && (
+                      <Text
+                        style={{
+                          ...pdfStyles.groupLabel,
+                          position: "absolute",
+                          bottom: toPoints(validMargin) / 2,
+                          left: pageWidth / 2,
+                          width: pageWidth / 2,
+                        }}
+                      >
+                        {pageData.groupLabelRight}
+                      </Text>
+                    )}
                   </Page>
                 );
               })}
@@ -1551,6 +1750,35 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                       className="absolute top-0 bottom-0 border-l border-dashed border-gray-300 z-10 pointer-events-none"
                       style={{ left: `${displayWidth / 2}px` }}
                     />
+                  )}
+
+                  {/* Automatic group caption (TASKS.md goal 3) */}
+                  {page.groupLabel && (
+                    <div
+                      className="absolute bottom-0 left-0 pointer-events-none"
+                      style={{
+                        width: combinePages
+                          ? `${displayWidth / 2}px`
+                          : `${displayWidth}px`,
+                        paddingBottom: `${toPoints(validMargin) / 2}px`,
+                        ...webStyles.groupLabel,
+                      }}
+                    >
+                      {page.groupLabel}
+                    </div>
+                  )}
+                  {combinePages && page.groupLabelRight && (
+                    <div
+                      className="absolute bottom-0 pointer-events-none"
+                      style={{
+                        left: `${displayWidth / 2}px`,
+                        width: `${displayWidth / 2}px`,
+                        paddingBottom: `${toPoints(validMargin) / 2}px`,
+                        ...webStyles.groupLabel,
+                      }}
+                    >
+                      {page.groupLabelRight}
+                    </div>
                   )}
 
                   {/* Photos */}

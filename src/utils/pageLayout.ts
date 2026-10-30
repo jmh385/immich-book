@@ -17,11 +17,23 @@ export interface PhotoBox {
 
 export type PageAlignment = "left" | "center" | "right";
 
+/**
+ * Layout style of a page group (TASKS.md goal 1):
+ * - justified: the usual rows (default)
+ * - spotlight: one photo per page, filling the content area
+ * - mixed: a large first photo plus justified rows below it
+ */
+export type LayoutStyle = "justified" | "spotlight" | "mixed";
+
 export interface Page {
   pageNumber: number;
   photos: PhotoBox[];
   width: number;
   height: number;
+  /** Automatic group caption shown on this page (left half in combined mode). */
+  groupLabel?: string;
+  /** Second group caption in combined-pages mode (right half). */
+  groupLabelRight?: string;
 }
 
 // Convert millimeters to pixels (assuming 300 DPI)
@@ -66,6 +78,17 @@ export interface LayoutOptions {
   combinePages?: boolean; // combine two pages into one PDF page
   customAspectRatios?: Map<string, number>; // custom aspect ratios per asset ID
   pageAlignments?: Map<number, PageAlignment>; // alignment per page number
+  /**
+   * Asset indices that start a new group: index 0 ends up implicitly at the
+   * front, any other index forces a page break before that asset. Allows
+   * multiple layout styles to coexist, because each group is laid out on its
+   * own pages (automatic grouping, TASKS.md goal 2).
+   */
+  groupBoundaries?: number[];
+  /** Layout style per group; parallel to groupBoundaries (plus implicit first). */
+  segmentStyles?: LayoutStyle[];
+  /** Caption per group; shown on the first page of each group. */
+  groupLabels?: (string | null)[];
 }
 
 /**
@@ -107,79 +130,170 @@ export function calculatePageLayout(
   const contentWidth = pageDimensions.width - margin * 2;
   const contentHeight = pageDimensions.height - margin * 2;
 
-  // Calculate aspect ratios for justified layout
-  const aspectRatios = new Float32Array(
-    assets.map((asset) => {
-      // Check if there's a custom aspect ratio for this asset
-      const customRatio = customAspectRatios?.get(asset.id);
-      if (customRatio) {
-        return customRatio;
-      }
-
-      // Otherwise use the asset's natural aspect ratio
-      const width = asset.exifInfo?.exifImageWidth || 1;
-      const height = asset.exifInfo?.exifImageHeight || 1;
-      if (asset.exifInfo?.orientation == "6") {
-        return height / width;
-      }
-      return width / height;
-    }),
+  // Determine page segments (groups). Starts are asset index 0 plus every
+  // other declared boundary; each segment is laid out independently and can
+  // have its own style and caption.
+  const boundarySet = new Set<number>(
+    (options.groupBoundaries ?? []).filter((i) => i > 0 && i < assets.length),
   );
-
-  // Run justified layout algorithm
-  const justifiedLayout = new JustifiedLayout(aspectRatios, {
-    rowHeight,
-    rowWidth: contentWidth,
-    spacing,
-    heightTolerance: 0,
-  });
-
-  // Convert justified layout positions to page-based layout
-  const pages: Page[] = [];
-  let currentPage: Page = {
-    pageNumber: 1,
-    photos: [],
-    width: pageDimensions.width,
-    height: pageDimensions.height,
-  };
-  let currentPageY = 0;
-
-  for (let i = 0; i < assets.length; i++) {
-    const box = justifiedLayout.getPosition(i);
-    const asset = assets[i];
-
-    // Check if photo fits on current page
-    const photoBottom = box.top + box.height;
-
-    if (
-      currentPage.photos.length > 0 &&
-      photoBottom - currentPageY > contentHeight
-    ) {
-      // Start a new page
-      pages.push(currentPage);
-      currentPage = {
-        pageNumber: pages.length + 1,
-        photos: [],
-        width: pageDimensions.width,
-        height: pageDimensions.height,
-      };
-      currentPageY = box.top;
-    }
-
-    // Add photo to current page (adjust Y relative to page)
-    currentPage.photos.push({
-      asset,
-      x: box.left + margin,
-      y: box.top - currentPageY + margin,
-      width: box.width,
-      height: box.height,
+  const starts = [0, ...[...boundarySet].sort((a, b) => a - b)];
+  const segments: { start: number; end: number }[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    segments.push({
+      start: starts[i],
+      end: i + 1 < starts.length ? starts[i + 1] : assets.length,
     });
   }
 
-  // Add the last page
-  if (currentPage.photos.length > 0) {
-    pages.push(currentPage);
-  }
+  // Aspect ratio of one asset, honoring custom ratios and EXIF orientation.
+  const assetRatio = (asset: AssetResponseDto): number => {
+    const customRatio = customAspectRatios?.get(asset.id);
+    if (customRatio) {
+      return customRatio;
+    }
+    const width = asset.exifInfo?.exifImageWidth || 1;
+    const height = asset.exifInfo?.exifImageHeight || 1;
+    if (asset.exifInfo?.orientation == "6") {
+      return height / width;
+    }
+    return width / height;
+  };
+
+  // Segment-relative photo boxes: x within the content area, y relative to
+  // the segment's first content row; page position is applied during paging.
+  type Box = {
+    asset: AssetResponseDto;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+
+  // Rows for a run of assets via the justified layout algorithm.
+  const justifiedRows = (run: AssetResponseDto[]): Box[] => {
+    const runRatios = new Float32Array(run.map(assetRatio));
+    const layout = new JustifiedLayout(runRatios, {
+      rowHeight,
+      rowWidth: contentWidth,
+      spacing,
+      heightTolerance: 0,
+    });
+    return run.map((asset, i) => {
+      const position = layout.getPosition(i);
+      return {
+        asset,
+        x: position.left,
+        y: position.top,
+        width: position.width,
+        height: position.height,
+      };
+    });
+  };
+
+  // Boxes for one segment according to its style.
+  const boxesForSegment = (
+    segmentAssets: AssetResponseDto[],
+    style: LayoutStyle,
+  ): Box[] => {
+    if (style === "spotlight") {
+      // One photo per page, filling the content area.
+      return segmentAssets.map((asset) => ({
+        asset,
+        x: 0,
+        y: 0,
+        width: contentWidth,
+        height: contentHeight,
+      }));
+    }
+
+    if (style === "mixed" && segmentAssets.length > 1) {
+      // First photo spans the full content width, capped at half the page so
+      // the remaining photos keep a visible area beneath it.
+      const first = segmentAssets[0];
+      const firstHeight = Math.min(
+        contentHeight / 2,
+        contentWidth / assetRatio(first),
+      );
+      const firstBox: Box = {
+        asset: first,
+        x: 0,
+        y: 0,
+        width: contentWidth,
+        height: firstHeight,
+      };
+      const rest = justifiedRows(segmentAssets.slice(1)).map((box) => ({
+        ...box,
+        y: box.y + firstHeight + spacing,
+      }));
+      // If nothing else fits below the large photo (page too short), let the
+      // rows overflow to following pages through normal pagination.
+      return [firstBox, ...rest];
+    }
+
+    return justifiedRows(segmentAssets);
+  };
+
+  // Run the segment layouts and paginate their boxes into pages.
+  const pages: Page[] = [];
+  const pageState: { current: Page | null; topY: number } = {
+    current: null,
+    topY: 0,
+  };
+
+  const flushPage = () => {
+    if (pageState.current && pageState.current.photos.length > 0) {
+      pages.push(pageState.current);
+    }
+    pageState.current = null;
+  };
+
+  const startPage = (label?: string) => {
+    flushPage();
+    pageState.current = {
+      pageNumber: pages.length + 1,
+      photos: [],
+      width: pageDimensions.width,
+      height: pageDimensions.height,
+      ...(label !== undefined ? { groupLabel: label } : {}),
+    };
+    pageState.topY = 0;
+  };
+
+  segments.forEach((segment, segmentIndex) => {
+    const style: LayoutStyle =
+      options.segmentStyles?.[segmentIndex] ?? "justified";
+    const segmentAssets = assets.slice(segment.start, segment.end);
+    const label = options.groupLabels?.[segmentIndex] ?? undefined;
+
+    // A group always starts on a fresh page.
+    startPage(label);
+    const pageGuard = () => pageState.current as Page;
+
+    for (const box of boxesForSegment(segmentAssets, style)) {
+      const photoBottom = box.y + box.height;
+
+      // Spotlight photos each get their own page; other styles paginate rows
+      // until the content area is full.
+      if (
+        pageGuard().photos.length > 0 &&
+        (style === "spotlight" || photoBottom - pageState.topY > contentHeight)
+      ) {
+        startPage();
+        if (box.y > pageState.topY) {
+          pageState.topY = box.y;
+        }
+      }
+
+      (pageGuard() as Page).photos.push({
+        asset: box.asset,
+        x: box.x + margin,
+        y: box.y - pageState.topY + margin,
+        width: box.width,
+        height: box.height,
+      });
+    }
+  });
+  flushPage();
 
   // Apply page alignments per row (before combining pages)
   if (pageAlignments) {
@@ -259,14 +373,22 @@ export function calculatePageLayout(
           width: pageDimensions.width * 2,
           height: pageDimensions.height,
         };
+        // Labels of the two logical pages move with their halves.
+        if (leftPage.groupLabel !== undefined) {
+          combinedPage.groupLabel = leftPage.groupLabel;
+        }
+        if (rightPage.groupLabel !== undefined) {
+          combinedPage.groupLabelRight = rightPage.groupLabel;
+        }
         combinedPages.push(combinedPage);
       } else {
         // Odd number of pages - last page stays single
-        combinedPages.push({
+        const singlePage: Page = {
           ...leftPage,
           pageNumber: Math.floor(i / 2) + 1,
           width: pageDimensions.width * 2, // Keep same width for consistency
-        });
+        };
+        combinedPages.push(singlePage);
       }
     }
     return combinedPages;
