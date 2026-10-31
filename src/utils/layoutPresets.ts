@@ -150,15 +150,18 @@ export function presetSlots(
   if (!definition) return [];
 
   return definition.slots.map(([nx, ny, nw, nh]) => {
-    const onRightEdge = nx + nw >= 1;
-    const onBottomEdge = ny + nh >= 1;
-    const x = nx * contentWidth;
-    const y = ny * contentHeight;
+    // Gutters only between slots: flush slots keep their outer edge, so the
+    // whole grid fills the content area (no leftover empty border).
+    const leftInset = nx > 1e-9 ? spacing / 2 : 0;
+    const rightInset = nx + nw < 1 - 1e-9 ? spacing / 2 : 0;
+    const topInset = ny > 1e-9 ? spacing / 2 : 0;
+    const bottomInset = ny + nh < 1 - 1e-9 ? spacing / 2 : 0;
+
     return {
-      x,
-      y,
-      width: Math.max(1, nw * contentWidth - (onRightEdge ? 0 : spacing)),
-      height: Math.max(1, nh * contentHeight - (onBottomEdge ? 0 : spacing)),
+      x: nx * contentWidth + leftInset,
+      y: ny * contentHeight + topInset,
+      width: Math.max(1, nw * contentWidth - leftInset - rightInset),
+      height: Math.max(1, nh * contentHeight - topInset - bottomInset),
     };
   });
 }

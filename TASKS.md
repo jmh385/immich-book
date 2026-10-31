@@ -100,3 +100,21 @@ Keep this file current: new goals go on top, completed items move to
   / photo backgrounds with preview CSS, PDF SVG gradients and full-page images,
   plus a contrast helper.
 - Album default plus per-page overrides, keyed by the page's first asset id.
+
+### 8. Live per-page editing in the preview — done (partial)
+
+- Per-page layout/background/text controls exist in the settings panel and
+  update the preview live; full inline-per-page editor still pending.
+
+### 9. Right-to-left page navigation — done
+
+- Added `pageDirection` setting (default RTL) and a view toggle; preview
+  container uses `dir` accordingly.
+
+### 10. Full-book spread view — done (partial)
+
+- Added `viewMode` (single/spread) that lays pages out side by side.
+
+### 11. Better preset geometry — done
+
+- Preset slots now tile the content area with gutters only between photos.

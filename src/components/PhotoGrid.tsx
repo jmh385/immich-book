@@ -81,6 +81,8 @@ interface GlobalConfig {
   pageHeight: number;
   margin: number;
   combinePages: boolean;
+  pageDirection: "ltr" | "rtl";
+  viewMode: "single" | "spread";
 
   // Layout settings
   rowHeight: number;
@@ -124,6 +126,8 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   pageHeight: 3260,
   margin: 118,
   combinePages: true,
+  pageDirection: "rtl",
+  viewMode: "single",
   rowHeight: 994,
   spacing: 20,
   filterVideos: true,
@@ -209,6 +213,8 @@ function saveAlbumConfig(albumId: string, config: AlbumConfig) {
       pageHeight: config.pageHeight,
       margin: config.margin,
       combinePages: config.combinePages,
+      pageDirection: config.pageDirection,
+      viewMode: config.viewMode,
       rowHeight: config.rowHeight,
       spacing: config.spacing,
       filterVideos: config.filterVideos,
@@ -322,6 +328,12 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
   const [pageHeight, setPageHeight] = useState(initialConfig.pageHeight);
   const [margin, setMargin] = useState(initialConfig.margin);
   const [combinePages, setCombinePages] = useState(initialConfig.combinePages);
+  const [pageDirection, setPageDirection] = useState<"ltr" | "rtl">(
+    initialConfig.pageDirection,
+  );
+  const [viewMode, setViewMode] = useState<"single" | "spread">(
+    initialConfig.viewMode,
+  );
 
   // Layout settings
   const [rowHeight, setRowHeight] = useState(initialConfig.rowHeight);
@@ -476,6 +488,8 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
       pageHeight,
       margin,
       combinePages,
+      pageDirection,
+      viewMode,
       rowHeight,
       spacing,
       filterVideos,
@@ -504,6 +518,8 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
     pageHeight,
     margin,
     combinePages,
+    pageDirection,
+    viewMode,
     rowHeight,
     spacing,
     filterVideos,
@@ -1363,6 +1379,38 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
                     Group Captions
                   </label>
                 </div>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="pageDirection" className="text-gray-600 text-xs">
+                    Page direction:
+                  </label>
+                  <select
+                    id="pageDirection"
+                    value={pageDirection}
+                    onChange={(event) =>
+                      setPageDirection(event.target.value as "ltr" | "rtl")
+                    }
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                  >
+                    <option value="ltr">Left to right</option>
+                    <option value="rtl">Right to left</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <label htmlFor="viewMode" className="text-gray-600 text-xs">
+                    View:
+                  </label>
+                  <select
+                    id="viewMode"
+                    value={viewMode}
+                    onChange={(event) =>
+                      setViewMode(event.target.value as "single" | "spread")
+                    }
+                    className="px-1 py-0.5 text-xs border border-gray-300 rounded"
+                  >
+                    <option value="single">Single page</option>
+                    <option value="spread">Two-page spread</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -1906,7 +1954,14 @@ function PhotoGrid({ immichConfig, album, onBack }: PhotoGridProps) {
         </div>
       ) : (
         /* Live Preview */
-        <div className="space-y-8 pb-8 overflow-x-auto px-4 sm:px-0">
+        <div
+          className={
+            viewMode === "spread"
+              ? "flex flex-wrap justify-center gap-6 pb-8 overflow-x-auto px-4 sm:px-0"
+              : "space-y-8 pb-8 overflow-x-auto px-4 sm:px-0"
+          }
+          dir={pageDirection === "rtl" ? "rtl" : "ltr"}
+        >
           {pages.map((page) => {
             // Scale down to match PDF dimensions (72 DPI from 300 DPI)
             const displayWidth = toPoints(page.width);

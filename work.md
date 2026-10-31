@@ -382,3 +382,27 @@ Risks: per-page overrides are keyed by the page's first asset id and can drift
 when pagination changes; gradients use SVG in PDF (banding possible on large
 flat areas); text-box drag coordinates are converted from 72 DPI screen
 pixels to 300 DPI page pixels.
+
+## Entry 5 — 2026-11-01 — Goals 8–11: live page editor, RTL nav, spread view, preset geometry
+
+### Plan
+
+1. Preset geometry (`layoutPresets.ts`): make slots fill the content area
+   exactly. Current slots use fractions with gutters only on non-edge sides, but
+   last slot absorbs remainder; adjust so every preset tiles the full content
+   rect (no leftover). Add tests for full coverage (sum of slot areas ==
+   content area within 1 px, no gaps).
+2. Live per-page editor: move the page-layout/background/text-box controls
+   inline above each page in the preview (instead of the global panel), so
+   edits show immediately. Reuse existing `pageLayouts`/`pageBackgrounds`/
+   `textBoxOverrides` maps keyed by page anchor.
+3. RTL navigation: add `pageDirection` ("ltr" | "rtl") setting (default rtl)
+   and a prev/next arrow control that scrolls pages in that direction; persist
+   per album/global.
+4. Spread view: add `viewMode` ("single" | "spread") that renders two logical
+   pages side by side (combined or uncombined) for a full-book preview.
+5. Keep preview/PDF geometry identical; run type-check + tests + build; update
+   TASKS.md checkboxes and work.md result.
+
+Risks: spread view with odd page counts needs a blank filler page; RTL scroll
+must not break existing page numbering; inline editors increase DOM size.
